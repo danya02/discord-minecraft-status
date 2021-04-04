@@ -6,5 +6,5 @@ services:
     env_file:
      - CONFIG.env
     volumes:
-      ./server-config.db:/config.db
+     - ./server_config.db:/config.db
     
