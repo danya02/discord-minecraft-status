@@ -258,5 +258,31 @@ def sync_guild_commands():
         async def guild_command(ctx):
             await send_status.invoke(ctx, serv.ip, serv.port)
 
+
+@slash.slash(name="mcwho",
+             description="Identify a Discord user's Minecraft username.",
+             options=[
+                 create_option(name="user", description="The user to lookup.", option_type=6, required=True),
+             ])
+async def mcwho(ctx, user: discord.User):
+    try:
+        username = PlayerID.resolve(user.id)
+        await ctx.send('User ' + user.mention + ' is associated with this Minecraft username: `'+username+'`.', allowed_mentions=discord.AllowedMentions.none())
+    except PlayerID.DoesNotExist:
+        await ctx.send('User ' + user.mention + ' is not associated with any Minecraft username.', allowed_mentions=discord.AllowedMentions.none())
+
+@slash.slash(name="discordwho",
+             description="Identify a Minecraft player's Discord account.",
+             options=[
+                 create_option(name="username", description="The username to lookup.", option_type=3, required=True),
+             ])
+async def discordwho(ctx, username):
+    try:
+        uid = PlayerID.resolve(username)
+        await ctx.send('Minecraft username `'+username+'` is associated with this Discord user: <@'+str(uid)+'>.', allowed_mentions=discord.AllowedMentions.none())
+    except PlayerID.DoesNotExist:
+        await ctx.send('Minecraft username `'+username+'` is not associated with a Discord user.', allowed_mentions=discord.AllowedMentions.none())
+
+
 sync_guild_commands()
 bot.run(DISCORD_TOKEN)
