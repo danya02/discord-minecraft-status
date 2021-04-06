@@ -1,4 +1,4 @@
 discord.py>=1.6.0
 discord-py-slash-command>=1.1.0 
-git+https://github.com/ammaraskar/pyCraft@1.14.2
 peewee>=3.14.0
+mcstatus>=5.1.2
