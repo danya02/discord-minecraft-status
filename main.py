@@ -20,11 +20,28 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN') or None
 bot = commands.Bot(command_prefix="!")
 slash = SlashCommand(bot, sync_commands=True)
 
-class Server(pw.Model):
-    def __init__(self, ip, port):
-        self.ip = ip
-        self.port = port
-        self.note = None
+db = pw.SqliteDatabase('/config.db')
+
+class MyModel(pw.Model):
+    class Meta:
+        database = db
+
+class Server(MyModel):
+    ip = pw.CharField()
+    port = pw.IntegerField()
+    note = pw.CharField()
+    guild = pw.BigIntegerField()
+    command = pw.CharField()
+    description = pw.CharField()
+
+    class Meta:
+        indexes = [
+                   (('ip', 'port',), False),
+                   (('guild', 'command',), True),
+                  ]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     @property
     def markdown(self):
@@ -34,12 +51,30 @@ class Server(pw.Model):
     def mcstatus(self):
         return mcstatus.MinecraftServer(self.ip, self.port)
 
-class PlayerID(pw.Model):
-    def __contains__(self, other): return False
-    def __getitem__(self, item): return None
+class PlayerID(MyModel):
+    discord_id = pw.BigIntegerField(unique=True)
+    minecraft_username = pw.CharField(unique=True)
+
+    @classmethod
+    def contains(cls, other):
+        # this will probably be used in conjunction with resolve(), but because the expected data volume is low, we can rely on the database to cache the result.
+        try:
+            item = cls.resolve(other)
+            return True
+        except cls.DoesNotExist:
+            return False
+
+    @classmethod
+    def resolve(cls, other):
+        if isinstance(other, int):
+            return cls.get(cls.discord_id==other).minecraft_username
+        else:
+            return cls.get(cls.minecraft_username==other).discord_id
+
+db.create_tables([Server, PlayerID])
 
 def get_pending_embed(server):
-    return discord.Embed(description='Querying server at ' + server.markdown + ' for information...', colour=discord.Colour.blue())                                                                   
+    return discord.Embed(description='Querying server at ' + server.markdown + ' for information...', colour=discord.Colour.blue())                                   
 
 def get_ping_pending_query_embed(server, ping, query=None):
     emb = discord.Embed(title='Server status:', colour=discord.Colour.from_rgb(255, 255, 0))
@@ -56,7 +91,6 @@ def get_error_embed(server):
 
 def get_query_result_embed(server, query=None, ping=None):
     data = {}
-    print(query, ping)
     qfailed = False
     if query == False:
         qfailed = True
@@ -79,7 +113,7 @@ def get_query_result_embed(server, query=None, ping=None):
     data['version'] = ping.get('version', {}).get('name') or query.get('software', {}).get('version')
     data['plugins'] = query.get('software', {}).get('plugins', [])
     data['favicon'] = ping.get('favicon')
-    data['motd'] = ping.get('description')
+    data['motd'] = ping.get('description') or query.get('hostname')
     data['modinfo'] = ping.get('modinfo') or ping.get('forgeData')
     data['slots-online'] = query.get('players', {}).get('online') or ping.get('players', {}).get('online')
     data['slots-max'] = query.get('players', {}).get('max') or ping.get('players', {}).get('max')
@@ -93,7 +127,6 @@ def get_query_result_embed(server, query=None, ping=None):
         if key == 'slots-online': continue
         del data[key]
 
-    print(data)
 
     emb = discord.Embed(description='Server stats:', colour=discord.Colour.green()).add_field(name="Server IP", value=server.markdown, inline=False)
     
@@ -104,7 +137,11 @@ def get_query_result_embed(server, query=None, ping=None):
         emb.add_field(name='Server version', value=data['version'])
 
     if 'motd' in data:
-        emb.add_field(name='MOTD', value=data['motd'])
+        motd = data['motd']
+        if isinstance(motd, dict) and list(motd) == ['text']: motd = motd['text']
+        motd = str(motd)
+        motd = re.sub('§.', '', motd)  # remove all formatting characters
+        emb.add_field(name='MOTD', value=motd)
 
     if 'slots-online' in data or 'slots-max' in data:
         emb.add_field(name='Slots', value=str(data.get('slots-online', '?'))+'/'+str(data.get('slots-max', '?')))\
@@ -113,10 +150,15 @@ def get_query_result_embed(server, query=None, ping=None):
         emb.add_field(name='Plugins', value=data['plugins'], inline=False)
 
     if 'players' in data:
-        emb.add_field(name='Players', value=data['players'])
+        player_list = ''
+        for nick in data['players']:
+            player_list += nick
+            if PlayerID.contains(nick):
+                player_list += ' (aka <@'+str(PlayerID.resolve(nick))+'>)'
+            player_list += '\n'
+        emb.add_field(name='Players', value=player_list)
 
     if not query or not ping:
-        print(qfailed)
         if qfailed: desc = 'Querying the server failed, is the query interface not enabled?'
         elif query == dict(): desc = 'Waiting for result of query...'
         elif ping == dict(): desc = 'Waiting for result of ping...'
@@ -151,10 +193,13 @@ def get_msg_embed(server, query=None, ping=None):
              options=[
                  create_option(name="ip", description="The server's connection IP.", option_type=3, required=True),
                  create_option(name="port", description="The server's connection port. Defaults to 25565.", option_type=4, required=False)
-             ], guild_ids=[775744109359923221])
+             ])
 async def send_status(ctx, ip, port=25565):
-    port = int(port or 25565)
-    server = Server(ip, port)
+    if ':' in ip:
+        ip, port_line = ip.split(':')
+    else: port_line = None
+    port = int(port_line or port or 25565)
+    server = Server(ip=ip, port=port)
     sr = server.mcstatus
     e, _ = get_msg_embed(server)
     msg = await ctx.send(embed=e)
@@ -207,5 +252,11 @@ async def send_status(ctx, ip, port=25565):
         else:
             await msg.edit(embed=e)
 
+def sync_guild_commands():
+    for serv in Server.select().iterator():
+        @slash.slash(name=serv.command, guild_ids=[serv.guild], description=serv.description)
+        async def guild_command(ctx):
+            await send_status.invoke(ctx, serv.ip, serv.port)
 
+sync_guild_commands()
 bot.run(DISCORD_TOKEN)
