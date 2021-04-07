@@ -1,8 +1,15 @@
-from flask import Flask
+from flask import Flask, abort, make_response
 import redis
 
-app = Flask(__main__)
+app = Flask(__name__)
+
+db = redis.Redis(host='redis')
 
 @app.route('/<file>')
 def serve_file(file):
-    return redis.get(file)
+    result = db.get(file)
+    if result is None:
+        return abort(404)
+    result = make_response(result)
+    result.mimetype='image/'+file.split('.')[-1]
+    return result

@@ -17,3 +17,5 @@ services:
     restart: unless-stopped
     depends_on:
      - redis
+    ports:
+     - "127.0.0.1:8731:8000"

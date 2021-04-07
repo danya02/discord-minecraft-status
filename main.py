@@ -15,7 +15,7 @@ import base64
 import io
 import hashlib
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN') or None
 URL_PREFIX = os.getenv('URL_PREFIX') or None
@@ -148,6 +148,8 @@ def get_query_result_embed(server, query=None, ping=None):
         motd = data['motd']
         if isinstance(motd, dict) and list(motd) == ['text']: motd = motd['text']
         motd = str(motd)
+        if len(motd)>1024:  # cannot be longer than 1024 characters
+            motd = motd[:1020] + '...'
         motd = re.sub('§.', '', motd)  # remove all formatting characters
         emb.add_field(name='MOTD', value=motd)
 
@@ -177,9 +179,9 @@ def get_query_result_embed(server, query=None, ping=None):
     if data.get('favicon'):
         res = re.match('data:image\/(.*);base64,(.*)', data['favicon'])
         ext = res.group(1)
-        data = base64.b64decode(bytes(res.group(2), 'utf-8'))
+        imgdata = base64.b64decode(bytes(res.group(2), 'utf-8'))
         if URL_PREFIX:
-            emb.set_thumbnail(url=URL_PREFIX+file_hash(data)+'.'+ext)
+            emb.set_thumbnail(url=URL_PREFIX+file_hash(imgdata)+'.'+ext)
 
     return emb, data.get('favicon')
     
@@ -248,6 +250,7 @@ async def send_status(ctx, ip, port=25565):
         data = base64.b64decode(bytes(data, 'utf-8'))
         redis = await aioredis.create_redis('redis://redis')
         await redis.set(file_hash(data)+'.'+ext, data)
+        await redis.expire(file_hash(data)+'.'+ext, 600)
  
     msg = await ctx.send(embed=e)
 
