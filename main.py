@@ -15,7 +15,7 @@ import base64
 import io
 import hashlib
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN') or None
 URL_PREFIX = os.getenv('URL_PREFIX') or None
@@ -212,15 +212,16 @@ def measure_latency(func):
                  create_option(name="ip", description="The server's connection IP.", option_type=3, required=True),
                  create_option(name="port", description="The server's connection port. Defaults to 25565.", option_type=4, required=False)
              ])
-async def send_status(ctx, ip, port=25565):
+async def send_status(ctx, ip, port=25565, note=None):
     if ':' in ip:
         ip, port_line = ip.split(':')
     else: port_line = None
     port = int(port_line or port or 25565)
     server = Server(ip=ip, port=port)
+    server.note = note
     sr = server.mcstatus
     
-    await ctx.defer()
+    await ctx.defer(hidden=False)
     
     ping = bot.loop.run_in_executor(None, sr.status)
     query = bot.loop.run_in_executor(None, measure_latency, sr.query)
@@ -259,7 +260,7 @@ def sync_guild_commands():
     for serv in Server.select().iterator():
         @slash.slash(name=serv.command, guild_ids=[serv.guild], description=serv.description)
         async def guild_command(ctx):
-            await send_status.invoke(ctx, serv.ip, serv.port)
+            await send_status.invoke(ctx, serv.ip, serv.port, note=serv.note)
 
 
 @slash.slash(name="mcwho",
