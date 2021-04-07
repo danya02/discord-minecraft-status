@@ -8,14 +8,14 @@ services:
     volumes:
      - ./server_config.db:/config.db
     depends_on:
-     - redis
-  redis:
-    image: redis:6.2.1-alpine
+     - redisserver
+  redisserver:
+    image: redis:6.2.1-buster
     restart: unless-stopped
   web:
     build: webserver/
     restart: unless-stopped
     depends_on:
-     - redis
+     - redisserver
     ports:
      - "127.0.0.1:8731:8000"

@@ -14,6 +14,7 @@ import re
 import base64
 import io
 import hashlib
+import traceback
 
 logging.basicConfig(level=logging.INFO)
 
@@ -249,18 +250,25 @@ async def send_status(ctx, ip, port=25565, note=None):
         ext = res.group(1)
         data = res.group(2)
         data = base64.b64decode(bytes(data, 'utf-8'))
-        redis = await aioredis.create_redis('redis://redis')
-        await redis.set(file_hash(data)+'.'+ext, data)
-        await redis.expire(file_hash(data)+'.'+ext, 600)
- 
+        try:
+            redis = await aioredis.create_redis('redis://redisserver')
+            await redis.set(file_hash(data)+'.'+ext, data)
+            await redis.expire(file_hash(data)+'.'+ext, 600)
+            #r = redis.Redis('redis://database')
+            #r.set(file_hash(data)+'.'+ext, data)
+            #r.expire(file_hash(data)+'.'+ext, 600)
+        except:
+            traceback.print_exc()
+            e.thumbnail = discord.Empty
+
     msg = await ctx.send(embed=e)
 
 
 def sync_guild_commands():
     for serv in Server.select().iterator():
-        @slash.slash(name=serv.command, guild_ids=[serv.guild], description=serv.description)
-        async def guild_command(ctx):
-            await send_status.invoke(ctx, serv.ip, serv.port, note=serv.note)
+        @slash.slash(name=serv.command, guild_ids=[serv.guild], description=serv.description, options=[])
+        async def guild_command(ctx, ip=serv.ip, port=serv.port, note=serv.note):
+            await send_status.invoke(ctx, ip, port, note=note)
 
 
 @slash.slash(name="mcwho",

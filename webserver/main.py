@@ -3,7 +3,7 @@ import redis
 
 app = Flask(__name__)
 
-db = redis.Redis(host='redis')
+db = redis.Redis(host='redisserver')
 
 @app.route('/<file>')
 def serve_file(file):
