@@ -4,6 +4,7 @@ from discord_slash import SlashCommand, SlashContext
 from discord_slash.utils.manage_commands import create_option
 import mcstatus
 import peewee as pw
+import aioredis
 
 import os
 import asyncio
@@ -12,15 +13,22 @@ import time
 import re
 import base64
 import io
+import hashlib
 
 logging.basicConfig(level=logging.INFO)
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN') or None
+URL_PREFIX = os.getenv('URL_PREFIX') or None
+if URL_PREFIX is None:
+    logging.error("URL_PREFIX is unset! Server favicons will not be sent!")
 
 bot = commands.Bot(command_prefix="!")
 slash = SlashCommand(bot, sync_commands=True)
 
 db = pw.SqliteDatabase('/config.db')
+
+def file_hash(data):
+    return hashlib.sha256(data).hexdigest()
 
 class MyModel(pw.Model):
     class Meta:
@@ -169,7 +177,9 @@ def get_query_result_embed(server, query=None, ping=None):
     if data.get('favicon'):
         res = re.match('data:image\/(.*);base64,(.*)', data['favicon'])
         ext = res.group(1)
-        emb.set_thumbnail(url='attachment://favicon.'+ext)
+        data = base64.b64decode(bytes(res.group(2), 'utf-8'))
+        if URL_PREFIX:
+            emb.set_thumbnail(url=URL_PREFIX+file_hash(data)+'.'+ext)
 
     return emb, data.get('favicon')
     
@@ -183,10 +193,16 @@ def get_msg_embed(server, query=None, ping=None):
     else:
         emb, favicon = get_query_result_embed(server, query=query, ping=ping)
 
-    
     if server.note:
         emb = emb.add_field(name="Note", value=server.note)
     return emb, favicon
+
+def measure_latency(func):
+    start = time.time()
+    result = func()
+    elapsed = time.time() - start
+    result.latency = elapsed * 1000
+    return result
 
 @slash.slash(name="status",
              description="Fetch a Minecraft server's status.",
@@ -201,56 +217,40 @@ async def send_status(ctx, ip, port=25565):
     port = int(port_line or port or 25565)
     server = Server(ip=ip, port=port)
     sr = server.mcstatus
-    e, _ = get_msg_embed(server)
-    msg = await ctx.send(embed=e)
+    
+    await ctx.defer()
+    
     ping = bot.loop.run_in_executor(None, sr.status)
-    start_query = time.time()
-    query = bot.loop.run_in_executor(None, sr.query)
+    query = bot.loop.run_in_executor(None, measure_latency, sr.query)
 
 
     # favicons are returned by ping requests, so when one is completed we delete our message and resend it with attachment
 
     done, pending = await asyncio.wait([ping, query], return_when=asyncio.FIRST_COMPLETED)
-    if ping in done:
-        e,f = get_msg_embed(server, query=None, ping=ping.result() if not ping.exception() else False)
-        if f:
-            res = re.match('data:image\/(.*);base64,(.*)', f)
-            ext = res.group(1)
-            data = res.group(2)
-            data = base64.b64decode(bytes(data, 'utf-8'))
-            file = discord.File(io.BytesIO(data), filename='favicon.'+ext)
-            await msg.delete()
-            msg = await ctx.send(embed=e, file=file)
-        else:
-            await msg.edit(embed=e)
 
-        try:
-            q = await query
-            query_time = (time.time() - start_query)
-            q.latency = query_time
-            e,f = get_msg_embed(server, query=q, ping=ping.result() if not ping.exception() else False)
-            await msg.edit(embed=e)
-        except:
-            e,f = get_msg_embed(server, query=False, ping=ping.result() if not ping.exception() else False)
-            await msg.edit(embed=e)
-    else:
-        q = query.result()
-        query_time = (time.time() - start_query)
-        q.latency = query_time*1000
-        e,f = get_msg_embed(server, query=q, ping=None)
-        await msg.edit(embed=e)
-        p = await ping
-        e,f = get_msg_embed(server, query=q, ping=p)
-        if f:
-            res = re.match('data:image\/(.*);base64,(.*)', f)
-            ext = res.group(1)
-            data = res.group(2)
-            data = base64.b64decode(bytes(data, 'utf-8'))
-            file = discord.File(io.BytesIO(data), filename='favicon.'+ext)
-            await msg.delete()
-            msg = await ctx.send(embed=e, file=file)
-        else:
-            await msg.edit(embed=e)
+    done, pending = await asyncio.wait([ping, query], return_when=asyncio.ALL_COMPLETED)
+
+    try:
+        ping_res = await ping
+    except:
+        ping_res = False
+
+    try:
+        query_res = await query
+    except:
+        query_res = False
+        
+    e,f = get_msg_embed(server, query=query_res, ping=ping_res)
+    if f:
+        res = re.match('data:image\/(.*);base64,(.*)', f)
+        ext = res.group(1)
+        data = res.group(2)
+        data = base64.b64decode(bytes(data, 'utf-8'))
+        redis = await aioredis.create_redis('redis://redis')
+        await redis.set(file_hash(data)+'.'+ext, data)
+ 
+    msg = await ctx.send(embed=e)
+
 
 def sync_guild_commands():
     for serv in Server.select().iterator():

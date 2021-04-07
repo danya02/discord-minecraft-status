@@ -7,4 +7,13 @@ services:
      - CONFIG.env
     volumes:
      - ./server_config.db:/config.db
-    
+    depends_on:
+     - redis
+  redis:
+    image: redis:6.2.1-alpine
+    restart: unless-stopped
+  web:
+    build: webserver/
+    restart: unless-stopped
+    depends_on:
+     - redis
