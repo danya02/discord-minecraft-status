@@ -253,10 +253,8 @@ async def send_status(ctx, ip, port=25565, note=None):
         try:
             redis = await aioredis.create_redis('redis://redisserver')
             await redis.set(file_hash(data)+'.'+ext, data)
-            await redis.expire(file_hash(data)+'.'+ext, 600)
             #r = redis.Redis('redis://database')
             #r.set(file_hash(data)+'.'+ext, data)
-            #r.expire(file_hash(data)+'.'+ext, 600)
         except:
             traceback.print_exc()
             e.thumbnail = discord.Empty

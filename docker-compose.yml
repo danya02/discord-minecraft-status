@@ -10,7 +10,7 @@ services:
     depends_on:
      - redisserver
   redisserver:
-    image: redis:6.2.1-buster
+    build: redis-conf/
     restart: unless-stopped
   web:
     build: webserver/
