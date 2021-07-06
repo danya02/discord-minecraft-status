@@ -205,16 +205,17 @@ def get_query_result_embed(server, query=None, ping=None):
 
 def get_msg_embed(server, query=None, ping=None):
     favicon = None
+    aliens = []
     if query is None and ping is None:
         emb = get_pending_embed(server)
     elif ping is False and not query:
         emb = get_error_embed(server)
     else:
-        emb, favicon = get_query_result_embed(server, query=query, ping=ping)
+        emb, favicon, aliens = get_query_result_embed(server, query=query, ping=ping)
 
     if server.note:
         emb = emb.add_field(name="Note", value=server.note)
-    return emb, favicon
+    return emb, favicon, aliens
 
 def measure_latency(func):
     start = time.time()
@@ -277,9 +278,9 @@ async def send_status(ctx, ip, port=25565, note=None, msg_on_aliens=None):
 
     msg = None
     if aliens and msg_on_aliens:
-        aliens_list = ' '.join(['`'+discord.utils.escape_markdown(nick)+'`' for nick in aliens])
+        aliens_list = ', '.join([discord.utils.escape_markdown(nick) for nick in aliens])
         msg = msg_on_aliens.format(aliens_list=aliens_list)
-    msg = await ctx.send(content=msg, embed=e)
+    msg = await ctx.send(content=msg, embed=e, allowed_mentions=discord.AllowedMentions.all())
 
 
 def sync_guild_commands():
