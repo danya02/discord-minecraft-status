@@ -16,6 +16,8 @@ import io
 import hashlib
 import traceback
 
+import migrations
+
 logging.basicConfig(level=logging.INFO)
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN') or None
@@ -27,6 +29,8 @@ bot = commands.Bot(command_prefix="!")
 slash = SlashCommand(bot, sync_commands=True)
 
 db = pw.SqliteDatabase('/config.db')
+
+migrations.perform_migrations(db)
 
 def file_hash(data):
     return hashlib.sha256(data).hexdigest()
@@ -42,6 +46,8 @@ class Server(MyModel):
     guild = pw.BigIntegerField()
     command = pw.CharField()
     description = pw.CharField()
+    channel_whitelist = pw.TextField(null=True)
+    message_on_alien_detected = pw.TextField(null=True)
 
     class Meta:
         indexes = [
@@ -59,6 +65,13 @@ class Server(MyModel):
     @property
     def mcstatus(self):
         return mcstatus.MinecraftServer(self.ip, self.port)
+
+    def channel_in_whitelist(self, channel):
+        if self.channel_whitelist is None: return True
+        if isinstance(channel, discord.abc.Snowflake):
+            channel = channel.id
+        channel = str(channel)
+        return channel in self.channel_whitelist.split()
 
 class PlayerID(MyModel):
     discord_id = pw.BigIntegerField(unique=True)
@@ -100,6 +113,7 @@ def get_error_embed(server):
 
 def get_query_result_embed(server, query=None, ping=None):
     data = {}
+    aliens = []
     qfailed = False
     if query == False:
         qfailed = True
@@ -163,9 +177,11 @@ def get_query_result_embed(server, query=None, ping=None):
     if 'players' in data:
         player_list = ''
         for nick in data['players']:
-            player_list += nick
+            player_list += discord.utils.escape_markdown(nick)
             if PlayerID.contains(nick):
                 player_list += ' (aka <@'+str(PlayerID.resolve(nick))+'>)'
+            else:
+                aliens.append(nick)
             player_list += '\n'
         emb.add_field(name='Players', value=player_list)
 
@@ -184,7 +200,7 @@ def get_query_result_embed(server, query=None, ping=None):
         if URL_PREFIX:
             emb.set_thumbnail(url=URL_PREFIX+file_hash(imgdata)+'.'+ext)
 
-    return emb, data.get('favicon')
+    return emb, data.get('favicon'), aliens
     
 
 def get_msg_embed(server, query=None, ping=None):
@@ -213,7 +229,7 @@ def measure_latency(func):
                  create_option(name="ip", description="The server's connection IP.", option_type=3, required=True),
                  create_option(name="port", description="The server's connection port. Defaults to 25565.", option_type=4, required=False)
              ])
-async def send_status(ctx, ip, port=25565, note=None):
+async def send_status(ctx, ip, port=25565, note=None, msg_on_aliens=None):
     if ':' in ip:
         ip, port_line = ip.split(':')
     else: port_line = None
@@ -244,7 +260,7 @@ async def send_status(ctx, ip, port=25565, note=None):
     except:
         query_res = False
         
-    e,f = get_msg_embed(server, query=query_res, ping=ping_res)
+    e,f,aliens = get_msg_embed(server, query=query_res, ping=ping_res)
     if f:
         res = re.match('data:image\/(.*);base64,(.*)', f)
         ext = res.group(1)
@@ -259,14 +275,21 @@ async def send_status(ctx, ip, port=25565, note=None):
             traceback.print_exc()
             e.thumbnail = discord.Empty
 
-    msg = await ctx.send(embed=e)
+    msg = None
+    if aliens and msg_on_aliens:
+        aliens_list = ' '.join(['`'+discord.utils.escape_markdown(nick)+'`' for nick in aliens])
+        msg = msg_on_aliens.format(aliens_list=aliens_list)
+    msg = await ctx.send(content=msg, embed=e)
 
 
 def sync_guild_commands():
     for serv in Server.select().iterator():
         @slash.slash(name=serv.command, guild_ids=[serv.guild], description=serv.description, options=[])
-        async def guild_command(ctx, ip=serv.ip, port=serv.port, note=serv.note):
-            await send_status.invoke(ctx, ip, port, note=note)
+        async def guild_command(ctx, ip=serv.ip, port=serv.port, note=serv.note, msg_on_aliens=serv.message_on_alien_detected, serv=serv):
+            if serv.channel_in_whitelist(ctx.channel):
+                await send_status.invoke(ctx, ip, port, note=note, msg_on_aliens=msg_on_aliens)
+            else:
+                await ctx.send("Sorry, you are not allowed to run this command in this channel. For more information, check this server's rules or contact an admin.", hidden=True)
 
 
 @slash.slash(name="mcwho",
@@ -293,6 +316,6 @@ async def discordwho(ctx, username):
     except PlayerID.DoesNotExist:
         await ctx.send('Minecraft username `'+username+'` is not associated with a Discord user.', allowed_mentions=discord.AllowedMentions.none())
 
-
-sync_guild_commands()
-bot.run(DISCORD_TOKEN)
+if __name__ == '__main__':
+    sync_guild_commands()
+    bot.run(DISCORD_TOKEN)
